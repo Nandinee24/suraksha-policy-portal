@@ -10,7 +10,28 @@ finish.
 
 From a clean clone, the exact commands. Include how to run your migrations.
 
+```bash
+# 1. Database - first start takes a few minutes
+docker compose up -d
+docker compose logs -f oracle      # wait for "DATABASE IS READY TO USE!", then Ctrl+C
 ```
+```
+# 2. Migrations
+#    (to be added)
+
+```
+```
+# 3. Backend - http://localhost:3001
+cd backend
+cp .env.example .env
+npm install
+npm run dev
+```
+```
+# 4. Frontend - http://localhost:5173 (separate terminal)
+cd frontend
+npm install
+npm run dev
 ```
 
 ## Schema changes
