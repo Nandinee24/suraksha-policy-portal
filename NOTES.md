@@ -59,7 +59,18 @@ resolved it.
 
 | What you found | What you did |
 |---|---|
-|  |  |
+| PREMIUM_MODE has 25 spellings for 4 modes, plus SINGLE (5018), which is not an R1 mode | |
+| PREMIUM_AMOUNT is free text in about 15 formats; 5014 is NULL, 5015 is 0, 5016 is −2,500 | |
+| Policy 5021 points to customer 999999, which doesn't exist | |
+| Payment 700469 belongs to policy 888888, which doesn't exist | |
+| Idempotency key `BR-RETRY-7C41E9AA` was used twice | |
+| Policy 5034 still shows its next due date as yesterday | |
+| 5013 is ACTIVE but has no next due date. 5011/5012 (surrendered/matured) have no dates. | |
+| Partial payments accepted by legacy: 5041 (₹1,200.10 + ₹1,200.20 vs ₹3,200), 5061 (₹9,000 vs ₹18,000). | |
+| 5023/5024: payments on the last grace day at 19:00 and 18:00 UTC, i.e. 00:30 IST (late) and 23:30 IST (on time). | |
+| `LEGACY_STATUS` is unreliable: ACTIVE / active / IN FORCE even for policies 800+ days overdue. | |
+| 1152/1153 share the dummy PAN `ABCDE1234F`, both named Rajesh Patel (likely a duplicate customer). | |
+| Names stored inconsistently (`RAJESH PATEL`, `rAJESH  mehta`, extra spaces); 1155 is in Gujarati script. | |
 
 ## Decisions and trade-offs
 
