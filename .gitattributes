@@ -1,0 +1,7 @@
+# Scripts under db/ run inside the Linux Oracle container. CRLF endings break
+# SQL*Plus block terminators ("/") and bash, so force LF regardless of the
+# cloning machine's core.autocrlf setting.
+* text=auto
+*.sql text eol=lf
+*.sh  text eol=lf
+*.pdf binary
