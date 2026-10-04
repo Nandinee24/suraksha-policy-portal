@@ -26,7 +26,8 @@ npm install
 npm run dev
 ```
 
-Start the database over (stop the backend first, it holds connections):
+Start the database over. Close every other DB connection first (backend, DBeaver,
+sqlplus): Oracle can't drop a user who is connected (ORA-01940).
 
 ```bash
 bash db/reset.sh      # drops the schema, reloads db/init/01_schema.sql + 02_seed.sql
@@ -43,6 +44,12 @@ bash db/migrate.sh
 - `db/tests/test_policy_rules.sql` tests month maths, status boundaries and the seed
   cases. Prints PASS/FAIL, changes nothing:
   `docker exec -i suraksha-oracle sqlplus -S suraksha/suraksha@//localhost:1521/FREEPDB1 < db/tests/test_policy_rules.sql`
+- `db/tests/test_record_payment.sql` tests every RECORD_PAYMENT rule and prints the
+  message a clerk would see. Changes nothing:
+  `docker exec -i suraksha-oracle sqlplus -S suraksha/suraksha@//localhost:1521/FREEPDB1 < db/tests/test_record_payment.sql`
+- `db/tests/race_test.sh` runs two sessions at the same time (see Concurrency).
+  It resets the database first and commits test payments:
+  `bash db/tests/race_test.sh`
 
 ## Schema changes
 
@@ -68,7 +75,10 @@ Original files in `db/init` are untouched. All changes are in `db/migrations`.
 | `POLICY_RULES` package (V070) | Every rule in one place: IST today, grace days, month maths, status. The view and the payment procedure use the same code. |
 | `POLICIES.DUE_DAY_ANCHOR` (V070) | Remembers the real due day, so 31 Jan → 28 Feb → 31 Mar (R6) |
 | `APP_CLOCK` table (V070) | Empty in normal use. Tests set it to fake "today" |
-| `V_POLICY_STATUS` view (V080) | Status calculated on every read, never stored (R4) |
+| `V_POLICY_STATUS` view (V080, extended in V090) | Status calculated on every read, never stored (R4). Also shows amount due, instalments due and revival deadline for the payment screen |
+| `PAYMENT_RULES` package (V090) | Revival deadline (R7), how many instalments are due, amount to collect |
+| `PAYMENTS.NEXT_DUE_AFTER`, `INSTALMENTS` (V090) | So a repeated request can return exactly the first result |
+| `RECORD_PAYMENT` procedure (V100) | Takes a payment: R5–R8 in one atomic call |
 
 **Indexes, and the query each one serves:**
 
@@ -86,16 +96,42 @@ Original files in `db/init` are untouched. All changes are in `db/migrations`.
 
 ## Concurrency
 
-_Not built yet. RECORD_PAYMENT is the next step._
+What stops two payments on the same policy at the same moment:
 
-Ready in the schema already:
-- Unique key on `IDEMPOTENCY_KEY`, so the same key can't create two payments.
-- Unique `(POLICY_ID, COVERS_DUE_DATE)`, so the same instalment can't be paid twice.
+1. **Row lock.** `SELECT … FOR UPDATE WAIT 5` on the policy. The second call waits until
+   the first commits, so they run one after the other, never together.
+2. **Expected due date (required).** The caller sends the due date the clerk saw. After
+   waiting, the second call sees the date has moved and is refused (`STALE_DUE_DATE`).
+   Without this, it would quietly pay the *next* instalment and both would succeed.
+3. **Unique `(POLICY_ID, COVERS_DUE_DATE)`.** Last line of defence: the database itself
+   refuses two payments for the same instalment.
+4. **5-second limit.** A stuck transaction can't freeze the counter; the second clerk
+   gets `POLICY_BUSY` and can retry.
+
+How I tested it (`db/tests/race_test.sh`, two real sessions, B starts 1 s after A):
+
+| Case | Result |
+|---|---|
+| Double-click: same key twice | A `RECORDED` payment 900000. B waited 2 s, then got `ALREADY_RECORDED`, same payment 900000 |
+| Two clerks, different keys | A `RECORDED`. B waited, then got `STALE_DUE_DATE` |
+| A holds its transaction for 8 s | B gave up after exactly 5 s with `POLICY_BUSY` |
+| End check | exactly 1 new payment per policy |
+
+The test found a bug: Oracle 23 reports the lock timeout as ORA-00054, not ORA-30006.
+The procedure only caught 30006, so the raw Oracle error leaked out. It now catches both.
 
 ## Idempotency
 
-_Not built yet._ The key will be enforced inside RECORD_PAYMENT, backed by the unique
-constraint on `PAYMENTS.IDEMPOTENCY_KEY`.
+- **Where:** inside `RECORD_PAYMENT`, right after the row lock. Backed by the unique
+  constraint on `PAYMENTS.IDEMPOTENCY_KEY`, so the key and the payment are saved together.
+- **Why after the lock:** a duplicate request that was waiting then sees the first
+  request's payment, instead of both seeing "key not used yet".
+- **A repeat returns** `ALREADY_RECORDED` with the **first** payment id and next due date
+  (stored on the payment in `NEXT_DUE_AFTER`). No second payment.
+- **Same key, different policy or amount** → refused (`IDEMPOTENCY_KEY_REUSED`). Never
+  answered with someone else's payment.
+- **Only successful payments store a key.** A rejected request saved nothing, so trying it
+  again is checked again from scratch.
 
 ## Data issues
 
@@ -116,6 +152,7 @@ Several of my migrations failed the first time on this data. The error is noted 
 | 5013 is ACTIVE but has no next due date. 5011/5012 (surrendered/matured) have no dates | Left as-is. Shown with status `NOT_SERVICEABLE`. |
 | Partial payments accepted by legacy: 5041 (₹1,200.10 + ₹1,200.20 vs ₹3,200), 5061 (₹9,000 vs ₹18,000) | Kept as history. New payments must match the premium exactly (R5). |
 | 5023/5024: paid on the last grace day at 19:00 and 18:00 UTC, i.e. 00:30 IST (late) and 23:30 IST (on time) | Shows why grace must be checked in IST, not UTC (R3). |
+| 5023/5024 also: a payment exists for the instalment, but the policy's due date was never moved | A new payment would pay the same instalment twice. RECORD_PAYMENT refuses it (`INSTALMENT_ALREADY_PAID`) and tells the clerk to refer it to servicing. |
 | `LEGACY_STATUS` says ACTIVE / active / IN FORCE even for policies 800+ days overdue | Not used. Status is calculated (R4). |
 | 1152/1153 share the dummy PAN `ABCDE1234F`, both "Rajesh Patel" (likely the same person twice) | PAN cleaned to one format. No unique rule on PAN and no merge: that's a KYC decision. |
 | Names stored inconsistently (`RAJESH PATEL`, `rAJESH  mehta`, extra spaces); 1155 is in Gujarati | Extra spaces removed, casing kept. Search must ignore case. |
@@ -142,10 +179,16 @@ Several of my migrations failed the first time on this data. The error is noted 
   - Trade-off: the anchor comes from today's due date, so a policy really due on the 30th that currently sits on 28 Feb looks month-end.
 - **Rules live in the database** (PL/SQL), not in Node, so the list and the payment check can't disagree.
 - **Test clock in a table**, not a package variable: recompiling a package with state breaks pooled sessions (ORA-04068).
+- **RECORD_PAYMENT signature changed:** added `P_EXPECTED_DUE`, required. It's what stops two clerks both succeeding (see Concurrency). Trade-off: the caller must send it.
+- **Revival (R7) collects all pending premiums at once.** It's still an exact amount (N × premium), and the due date moves N periods. R5 says "the modal premium" and R6 says "one period", so I treat revival as the stated exception. Example: 5008 must pay 5 × ₹12,000 = ₹60,000.
+- **Revival window is inclusive**, in calendar years (`first unpaid + 24 months`), not 730 days. Tested: 729 and 730 days revive, 731 is refused.
+- **No advance payments.** If nothing is due yet (PAID), the payment is refused with the next due date. It also blocks a second click from paying next month. Trade-off: no prepaying at the counter.
+- **No COMMIT inside the procedure.** The caller commits. If anything fails, the whole call rolls back, so the insert and update always happen together.
+- **`PAID_AT` is written as UTC explicitly** (`SYS_EXTRACT_UTC`), not "whatever the server clock is".
+- **Error codes -20001…-20010**, one per rule, each with a message a clerk can read. The backend maps them to HTTP codes.
 
 ## Not done / next
 
-- `RECORD_PAYMENT` procedure (exact amount, revival window, locking, idempotency) and its tests.
 - Backend endpoints and error mapping.
 - Frontend list, detail and payment form.
 - REVIEW.md.
