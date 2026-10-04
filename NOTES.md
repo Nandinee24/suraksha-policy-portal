@@ -258,7 +258,6 @@ Several of my migrations failed the first time on this data. The error is noted 
 
 ## Not done / next
 
-- REVIEW.md.
 - Automated UI tests (e.g. Playwright). The UI was checked by hand in the browser.
 - Who recorded a payment: there is no clerk login, so payments have no user id.
 - Printable receipt.
@@ -273,5 +272,6 @@ Several of my migrations failed the first time on this data. The error is noted 
   - drafted the PL/SQL (`POLICY_RULES`, `PAYMENT_RULES`, `RECORD_PAYMENT`) and the database tests
   - drafted the backend (routes, validation, error mapping) and the API test scripts
   - drafted the React screens and tested them in a browser
+  - drafted REVIEW.md, using evidence found in the seed data
 - **What I did myself:** read every script, ran each migration, checked every error
   against the data, and chose how to handle each case.
