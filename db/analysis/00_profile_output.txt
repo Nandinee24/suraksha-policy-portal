@@ -1,0 +1,172 @@
+﻿=== 1. Row counts (expect 155 / 194 / 472)
+
+ CUSTOMERS   POLICIES	PAYMENTS
+---------- ---------- ----------
+       155	  194	     472
+
+1 row selected.
+
+=== 2. Premium mode: every spelling in use (brackets show stray spaces)
+
+MODE_RAW		  N
+---------------- ----------
+[Mly]			 14
+[YEARLY]		 13
+[Yly]			 12
+[  YEARLY ]		 11
+[Y]			 11
+[QUARTERLY]		 10
+[mth]			 10
+[MONTHLY]		 10
+[M]			 10
+[monthly]		 10
+[ANNUAL]		  9
+[ Quarterly]		  9
+[Qly]			  8
+[yearly]		  8
+[Q]			  6
+[HALF-YEARLY]		  6
+[quarterly]		  6
+[MTH]			  5
+[SEMI-ANNUAL]		  5
+[half yearly]		  5
+[Hly]			  5
+[QTR]			  4
+[H]			  3
+[HY]			  3
+[SINGLE]		  1
+
+25 rows selected.
+
+=== 3. Premium amount: formats in use (every digit shown as 9)
+
+SHAPE			      N
+-------------------- ----------
+9999.99 		     36
+9,999.99		     26
+9999			     17
+99999.99		     17
+99,999.99		     17
+Rs. 99,999.99		     16
+  99999 		     14
+99999			     14
+Rs. 9,999.99		     13
+INR 9,999.99		      8
+  9999			      8
+INR 99,999.99		      5
+9			      1
+<NULL>			      1
+-9,999.99		      1
+
+15 rows selected.
+
+=== 4. Premiums that are missing, zero or negative after parsing
+
+ POLICY_ID RAW_AMOUNT		  PARSED
+---------- ------------------ ----------
+      5014 []
+      5015 [0]			       0
+      5016 [-2,500.00]		   -2500
+
+3 rows selected.
+
+=== 5a. Policies whose customer does not exist (will break the FK)
+
+ POLICY_ID POLICY_NO	      CUSTOMER_ID
+---------- ------------------ -----------
+      5021 SL-2024-000121	   999999
+
+1 row selected.
+
+=== 5b. Payments whose policy does not exist (will break the FK)
+
+PAYMENT_ID  POLICY_ID	  AMOUNT IDEM_KEY
+---------- ---------- ---------- ----------------------
+    700469     888888	    5000 legacy-orphan-0001
+
+1 row selected.
+
+=== 6. Idempotency key used more than once (R8 already violated)
+
+PAYMENT_ID  POLICY_ID	  AMOUNT PAID_AT								     IDEM_KEY		    CHANNEL
+---------- ---------- ---------- --------------------------------------------------------------------------- ---------------------- --------------------
+    700467	 5034	   36000 24-SEP-26 11.00.00.000000 AM						     BR-RETRY-7C41E9AA	    BRANCH
+    700468	 5034	   36000 24-SEP-26 11.00.03.000000 AM						     BR-RETRY-7C41E9AA	    BRANCH
+
+2 rows selected.
+
+=== 7. Policy number duplicated when case/spaces are ignored
+
+ POLICY_ID POLICY_NO	      CUSTOMER_ID COMMENCEMENT_DATE
+---------- ------------------ ----------- ------------------
+      5019 [SL-2024-000120]	     1033 03-JUN-25
+      5020 [sl-2024-000120]	     1079 03-MAR-22
+
+2 rows selected.
+
+=== 8. Same instalment paid more than once
+
+ POLICY_ID COVERS_DUE_DATE	       N
+---------- ------------------ ----------
+      5034 24-SEP-26		       2
+
+1 row selected.
+
+=== 9. Customers: duplicate PAN (normalised), bad PAN format, messy names
+
+CUSTOMER_ID FULL_NAME			 PAN
+----------- ---------------------------- --------------
+       1151 [Rajesh Patel]		 [ABCDE1234F]
+       1152 [RAJESH PATEL]		 [abcde1234f]
+       1153 [Rajesh  Patel ]		 [ ABCDE1234F ]
+       1154 [rAJESH  mehta]		 [ZYSHS9122T]
+       1155 [Hiral Patel / α¬╣α¬┐α¬░α¬▓ α¬¬α¬ƒα½çα¬▓]    [NAPVD7327P]
+
+5 rows selected.
+
+=== 10. Impossible or missing dates (days relative to load date)
+
+ POLICY_ID LEGACY_STATUS  NEXT_DUE_OFFSET FIRST_UNPAID_OFFSET
+---------- -------------- --------------- -------------------
+      5008 ACTIVE		     -800		 -730
+      5009 ACTIVE		     -820		 -731
+      5010 ACTIVE		     -790		 -729
+      5011 SURRENDERED
+      5012 MATURED
+      5013 ACTIVE
+
+6 rows selected.
+
+=== 11. LEGACY_STATUS values (why R4 says never to trust it)
+
+LEGACY_STATUS		N OVERDUE_OVER_30_DAYS
+-------------- ---------- --------------------
+[ACTIVE]	      121		    29
+[SURRENDERED]		1		     0
+[MATURED]		1		     0
+[IN FORCE]	       36		    10
+[active]	       35		     6
+
+5 rows selected.
+
+=== 12. Payments that do not equal the policy premium (R5 already violated)
+
+PAYMENT_ID  POLICY_ID	  AMOUNT RAW_AMOUNT	    CHANNEL
+---------- ---------- ---------- ------------------ --------------------
+    700470	 5061	    9000 18000.00	    BRANCH
+    700471	 5041	  1200.1 INR 3,200.00	    ONLINE
+    700472	 5041	  1200.2 INR 3,200.00	    ONLINE
+    700037	 5016	    2500 -2,500.00	    BRANCH
+    700038	 5016	    2500 -2,500.00	    ONLINE
+    700039	 5016	    2500 -2,500.00	    AGENT
+
+6 rows selected.
+
+=== 13. Payments whose IST date differs from their UTC date (R3 timezone cases)
+
+PAYMENT_ID  POLICY_ID PAID_AT_UTC								  PAID_AT_IST	     COVERS_OFFSET
+---------- ---------- --------------------------------------------------------------------------- ------------------ -------------
+    700465	 5023 19-AUG-26 07.00.00.000000 PM						  20-AUG-26		       -75
+
+1 row selected.
+

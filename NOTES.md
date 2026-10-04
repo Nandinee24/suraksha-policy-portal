@@ -37,6 +37,9 @@ bash db/migrate.sh
   leaves half the changes behind. Fix the file, reset, run again.
 - `db/analysis/00.sql` has the read-only queries I used to find the data problems.
   Its output is in `00_profile_output.txt`.
+- `db/analysis/02_verify_migrations.sql` checks the result of the migrations and
+  tries bad inserts to prove each constraint blocks them (all rolled back):
+  `docker exec -i suraksha-oracle sqlplus -S suraksha/suraksha@//localhost:1521/FREEPDB1 < db/analysis/02_verify_migrations.sql`
 
 ## Schema changes
 
@@ -50,6 +53,7 @@ Original files in `db/init` are untouched. All changes are in `db/migrations`.
 | Original `PREMIUM_MODE` / `PREMIUM_AMOUNT` kept | Audit trail: you can see what the legacy system said |
 | NOT NULL on policy no, customer id, start date (V040) | Always filled; keep it that way |
 | Policy no stored upper case, unique (V040) | No two policies with the same number |
+| Check: policy no must be upper case, no spaces (V045) | Unique rule is case-sensitive; without this, `sl-…` could duplicate `SL-…` again |
 | Foreign key policy → customer (V040) | A policy must belong to a customer |
 | Check: first unpaid date ≤ next due date (V040) | The oldest unpaid due can't be after the next one |
 | NOT NULL on all payment columns (V050) | Always filled |
@@ -96,6 +100,7 @@ Several of my migrations failed the first time on this data. The error is noted 
 | Premium amount as text in ~15 formats (`Rs.`, `INR`, commas, spaces) | Parsed into a number. The `Rs.` prefix is removed first, otherwise its dot breaks the number. |
 | 5014 premium empty, 5015 is 0, 5016 is −2,500 | NOT NULL failed (ORA-02296). Set to empty, so these policies can't take payments. Did not guess: 5016 is probably a sign typo, but it's a money field. |
 | 5019 and 5020 have the same policy no `SL-2024-000120` (different customers) | Unique rule failed (ORA-02299). Added it with `NOVALIDATE`: this pair stays, new duplicates are blocked. Didn't renumber, because the number is on the customer's documents. |
+| My own check (`db/analysis/02_verify_migrations.sql`) found that a new lower-case `sl-2024-000101` still got past the unique rule. That's how the legacy duplicate happened. | Added a check forcing upper case (V045). |
 | Policy 5021's customer (999999) doesn't exist | Foreign key failed (ORA-02298). Added it with `NOVALIDATE`. The policy stays visible and payable; it's still a real contract. |
 | 5008/5009/5010: first unpaid date is after the next due date | Check failed (ORA-02293). Kept as-is: these are the 2-year revival test cases, and R7 says to measure from the first unpaid date. Check added with `NOVALIDATE`. |
 | Payment 700469 (₹5,000) is for policy 888888, which doesn't exist | Foreign key failed (ORA-02298). Moved to quarantine (`ORPHAN_POLICY`) for finance to check. |
