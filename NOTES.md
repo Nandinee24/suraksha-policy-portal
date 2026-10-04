@@ -164,6 +164,34 @@ Every error looks like `{ "error": "AMOUNT_MISMATCH", "message": "Please collect
 | 503 | Database down or pool full | `DB_UNAVAILABLE` |
 | 500 | Real bug (logged) | `INTERNAL` |
 
+## Frontend
+
+- **List:** search (policy no or name), status filter, Previous / Next. One page at a
+  time from the API. Filter, search and page are kept in the URL, so Back and refresh
+  keep the clerk's place.
+- **Status at a glance, not by colour alone:** every badge has an icon and a word
+  (✓ Paid up, ● Due, ◐ In grace, ✕ Lapsed, ! Check record), plus colour. Status is
+  the second column so it's visible even on a narrow screen.
+- **Detail:** one sentence saying what to do today (e.g. "revive by paying all 5 pending
+  premiums: 5 × ₹12,000 = ₹60,000"), policy and customer details, and payment history
+  in IST with a "paid late" tag.
+- **Record Payment can't be sent twice:**
+  - a `useRef` flag stops the second click instantly; React state updates too late for a fast double-click
+  - the button is disabled while sending
+  - Enter goes through the same form handler
+  - the Idempotency-Key is the server-side safety net
+- **Idempotency key in the browser:**
+  - created when the form opens
+  - **kept** after a network error, so pressing again is a safe retry
+  - **renewed** after a success or when the amount or channel changes, since that's a new payment
+- **Errors in clerk language:** chosen by error code. Amount errors appear under the amount
+  field. If another counter just paid the policy, the page refreshes and says so.
+- **Loading, empty and error states** on both screens, with "Try again". Amounts in ₹ with
+  Indian grouping (₹1,25,000.00).
+- **Tested in the browser:**
+  - filter, search, paging, Back, and every special policy (revival, window closed, no customer, paid late, not found)
+  - a scripted double-click + Enter sent exactly **1** request
+
 ## Data issues
 
 Several of my migrations failed the first time on this data. The error is noted next to each one.
@@ -224,11 +252,16 @@ Several of my migrations failed the first time on this data. The error is noted 
 - **Pool waits at most 10 s** for a free connection, then answers 503, instead of hanging for the 60 s default.
 - **PAN is masked** in the API (`AB******4F`). The counter doesn't need the full number.
 - **Shutdown on SIGINT and SIGTERM.** Stop taking requests, finish running ones, close the pool.
+- **Amount is not pre-filled.** The clerk types what they received, or presses "Use ₹X". Pre-filling invites submitting without counting the cash. The server checks the amount anyway.
+- **Dates are formatted from text** (`2026-10-04` → `04 Oct 2026`), never with `new Date()`, which reads it as UTC midnight and can show the day before.
+- **Plain CSS, no component library.** It's two screens, so one small stylesheet is enough.
 
 ## Not done / next
 
-- Frontend list, detail and payment form.
 - REVIEW.md.
+- Automated UI tests (e.g. Playwright). The UI was checked by hand in the browser.
+- Who recorded a payment: there is no clerk login, so payments have no user id.
+- Printable receipt.
 
 ## AI usage
 
@@ -239,5 +272,6 @@ Several of my migrations failed the first time on this data. The error is noted 
   - drafted the migration SQL and the `migrate.sh` / `reset.sh` scripts
   - drafted the PL/SQL (`POLICY_RULES`, `PAYMENT_RULES`, `RECORD_PAYMENT`) and the database tests
   - drafted the backend (routes, validation, error mapping) and the API test scripts
+  - drafted the React screens and tested them in a browser
 - **What I did myself:** read every script, ran each migration, checked every error
   against the data, and chose how to handle each case.

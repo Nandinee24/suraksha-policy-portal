@@ -15,6 +15,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
         <Routes>
           <Route path="/" element={<PolicyList />} />
           <Route path="/policies/:id" element={<PolicyDetail />} />
+          <Route path="*" element={<p className="state">Page not found. <a href="/">Go to the policy list</a></p>} />
         </Routes>
       </main>
     </BrowserRouter>
