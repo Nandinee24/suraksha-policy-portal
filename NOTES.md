@@ -40,6 +40,9 @@ bash db/migrate.sh
 - `db/analysis/02_verify_migrations.sql` checks the result of the migrations and
   tries bad inserts to prove each constraint blocks them (all rolled back):
   `docker exec -i suraksha-oracle sqlplus -S suraksha/suraksha@//localhost:1521/FREEPDB1 < db/analysis/02_verify_migrations.sql`
+- `db/tests/test_policy_rules.sql` tests month maths, status boundaries and the seed
+  cases. Prints PASS/FAIL, changes nothing:
+  `docker exec -i suraksha-oracle sqlplus -S suraksha/suraksha@//localhost:1521/FREEPDB1 < db/tests/test_policy_rules.sql`
 
 ## Schema changes
 
@@ -62,6 +65,10 @@ Original files in `db/init` are untouched. All changes are in `db/migrations`.
 | Unique `(POLICY_ID, COVERS_DUE_DATE)` (V050) | R8: one payment per instalment, even with two different keys |
 | Checks: amount > 0, channel in a fixed list (V050) | Block bad values |
 | Customer PAN upper case + format check; names trimmed (V060) | One format; garbage PANs blocked |
+| `POLICY_RULES` package (V070) | Every rule in one place: IST today, grace days, month maths, status. The view and the payment procedure use the same code. |
+| `POLICIES.DUE_DAY_ANCHOR` (V070) | Remembers the real due day, so 31 Jan → 28 Feb → 31 Mar (R6) |
+| `APP_CLOCK` table (V070) | Empty in normal use. Tests set it to fake "today" |
+| `V_POLICY_STATUS` view (V080) | Status calculated on every read, never stored (R4) |
 
 **Indexes, and the query each one serves:**
 
@@ -106,7 +113,7 @@ Several of my migrations failed the first time on this data. The error is noted 
 | Payment 700469 (₹5,000) is for policy 888888, which doesn't exist | Foreign key failed (ORA-02298). Moved to quarantine (`ORPHAN_POLICY`) for finance to check. |
 | Key `BR-RETRY-7C41E9AA` used twice, 3 seconds apart (700467/700468, policy 5034): a real double charge | Unique key failed (ORA-02299). Kept the first; moved the second to quarantine (`DUPLICATE_CHARGE_REFUND_DUE`). **The customer needs a refund.** |
 | Policy 5034 was paid 9 days ago but still shows its next due date as yesterday | Left as-is. Status is calculated from the policy row (R4), not from payments. |
-| 5013 is ACTIVE but has no next due date. 5011/5012 (surrendered/matured) have no dates | Left as-is. Status can't be calculated for them (to handle in the status view). |
+| 5013 is ACTIVE but has no next due date. 5011/5012 (surrendered/matured) have no dates | Left as-is. Shown with status `NOT_SERVICEABLE`. |
 | Partial payments accepted by legacy: 5041 (₹1,200.10 + ₹1,200.20 vs ₹3,200), 5061 (₹9,000 vs ₹18,000) | Kept as history. New payments must match the premium exactly (R5). |
 | 5023/5024: paid on the last grace day at 19:00 and 18:00 UTC, i.e. 00:30 IST (late) and 23:30 IST (on time) | Shows why grace must be checked in IST, not UTC (R3). |
 | `LEGACY_STATUS` says ACTIVE / active / IN FORCE even for policies 800+ days overdue | Not used. Status is calculated (R4). |
@@ -123,11 +130,21 @@ Several of my migrations failed the first time on this data. The error is noted 
 - **No data-issue table.** Each decision is written in the migration's comments and here. Trade-off: no follow-up queue for operations.
 - **Migrations run with a small bash script, not Flyway.** Simple and easy to read. Trade-off: no partial re-runs; reset and run all.
 - **`.gitattributes` forces LF line endings** on `.sql`/`.sh`. They run inside a Linux container; Windows CRLF breaks them.
+- **"Today" is the IST date**, from one function. The container runs in UTC, so `SYSDATE` would be a day behind between 00:00 and 05:30 IST.
+- **Status boundaries** (my reading of R4):
+  - 30 days away = DUE ("PAID" says *more than* 30)
+  - due today = DUE ("not yet past")
+  - last day of grace = IN_GRACE (R3)
+- **A fifth status, `NOT_SERVICEABLE`**, for policies with no valid mode, premium or due date (5011–5016, 5018). Putting them in PAID or LAPSED would be wrong, and `LEGACY_STATUS` can't be used.
+- **Month maths uses an anchor day, not `ADD_MONTHS`.**
+  - `ADD_MONTHS` turns 30 Apr into 31 May.
+  - `+ INTERVAL '1' MONTH` crashes on 31 Jan.
+  - Trade-off: the anchor comes from today's due date, so a policy really due on the 30th that currently sits on 28 Feb looks month-end.
+- **Rules live in the database** (PL/SQL), not in Node, so the list and the payment check can't disagree.
+- **Test clock in a table**, not a package variable: recompiling a package with state breaks pooled sessions (ORA-04068).
 
 ## Not done / next
 
-- Rules package: IST "today", grace periods, month-end date maths.
-- `V_POLICY_STATUS` view (PAID / DUE / IN_GRACE / LAPSED).
 - `RECORD_PAYMENT` procedure (exact amount, revival window, locking, idempotency) and its tests.
 - Backend endpoints and error mapping.
 - Frontend list, detail and payment form.
