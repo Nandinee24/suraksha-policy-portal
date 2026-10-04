@@ -5,7 +5,9 @@
   "type": "commonjs",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "dev": "node --watch src/server.js",
+    "api-check": "node scripts/api-check.js",
+    "race-test": "node scripts/race-test.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

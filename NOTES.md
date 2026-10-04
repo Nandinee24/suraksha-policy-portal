@@ -50,6 +50,9 @@ bash db/migrate.sh
 - `db/tests/race_test.sh` runs two sessions at the same time (see Concurrency).
   It resets the database first and commits test payments:
   `bash db/tests/race_test.sh`
+- API tests, with the backend running (they record payments, so reset afterwards):
+  - `npm run api-check` (in `backend/`) checks every endpoint and error code over HTTP.
+  - `npm run race-test` sends 10 payment requests at the same moment.
 
 ## Schema changes
 
@@ -117,6 +120,13 @@ How I tested it (`db/tests/race_test.sh`, two real sessions, B starts 1 s after 
 | A holds its transaction for 8 s | B gave up after exactly 5 s with `POLICY_BUSY` |
 | End check | exactly 1 new payment per policy |
 
+Same check through the whole stack (`npm run race-test`, 10 HTTP requests at once):
+
+| Case | Result |
+|---|---|
+| 10 × same key | 1 × `201`, 9 × `200 ALREADY_RECORDED`, all with the same payment id |
+| 10 × different keys | 1 × `201`, 9 × `409 STALE_DUE_DATE` |
+
 The test found a bug: Oracle 23 reports the lock timeout as ORA-00054, not ORA-30006.
 The procedure only caught 30006, so the raw Oracle error leaked out. It now catches both.
 
@@ -132,6 +142,27 @@ The procedure only caught 30006, so the raw Oracle error leaked out. It now catc
   answered with someone else's payment.
 - **Only successful payments store a key.** A rejected request saved nothing, so trying it
   again is checked again from scratch.
+- **Over HTTP:** the `Idempotency-Key` header is required (400 without it). First request
+  gives `201`. A repeat gives `200` with the same body and the header `Idempotent-Replayed: true`.
+
+## API
+
+| Endpoint | Notes |
+|---|---|
+| `GET /policies?status=&search=&page=&pageSize=` | Filter, search and paging in the database; returns `items`, `total`, `totalPages`. Search ignores case and matches policy no or name. `%` and `_` are searched literally. `pageSize` max 100. |
+| `GET /policies/:id` | Policy, status, amount to collect today, customer (PAN masked), payments newest first with IST times and a `paidLate` flag |
+| `POST /policies/:id/payments` | Body `{ amount, channel, expectedDueDate }`, header `Idempotency-Key`. Calls `RECORD_PAYMENT` |
+
+Every error looks like `{ "error": "AMOUNT_MISMATCH", "message": "Please collect exactly Rs. 2,000.00 …" }`.
+
+| HTTP | Meaning | Codes |
+|---|---|---|
+| 400 | Fix the request | `VALIDATION_ERROR`, `IDEMPOTENCY_KEY_REQUIRED` |
+| 404 | No such policy / route | `POLICY_NOT_FOUND`, `NOT_FOUND` |
+| 409 | Clashed with another request or existing data: refresh or retry | `STALE_DUE_DATE`, `POLICY_BUSY`, `IDEMPOTENCY_KEY_REUSED`, `INSTALMENT_ALREADY_PAID` |
+| 422 | Valid request, a business rule says no | `AMOUNT_MISMATCH`, `REVIVAL_WINDOW_EXPIRED`, `NOT_YET_DUE`, `POLICY_NOT_SERVICEABLE` |
+| 503 | Database down or pool full | `DB_UNAVAILABLE` |
+| 500 | Real bug (logged) | `INTERNAL` |
 
 ## Data issues
 
@@ -186,10 +217,16 @@ Several of my migrations failed the first time on this data. The error is noted 
 - **No COMMIT inside the procedure.** The caller commits. If anything fails, the whole call rolls back, so the insert and update always happen together.
 - **`PAID_AT` is written as UTC explicitly** (`SYS_EXTRACT_UTC`), not "whatever the server clock is".
 - **Error codes -20001…-20010**, one per rule, each with a message a clerk can read. The backend maps them to HTTP codes.
+- **Dates leave the API as `YYYY-MM-DD` text, made in SQL.** The Oracle driver turns a DATE into a JS Date in the server's timezone, which can show the previous day. Payment times are converted to IST in SQL and sent with `+05:30`.
+- **Money is checked in the database only.** Node checks the amount's format (max 2 decimals, as text, so `2000.001` is rejected, not rounded), but the exact-premium rule is compared as an Oracle NUMBER. No float maths on money.
+- **Two queries for the list (page + count)**, not `COUNT(*) OVER ()`, which gives no total on an empty page. Trade-off: one extra query.
+- **No transaction wrapper in Node.** Every write is a single `RECORD_PAYMENT` call with `autoCommit`. Returning a connection to the pool rolls back anything left over, so a failed request never keeps a lock.
+- **Pool waits at most 10 s** for a free connection, then answers 503, instead of hanging for the 60 s default.
+- **PAN is masked** in the API (`AB******4F`). The counter doesn't need the full number.
+- **Shutdown on SIGINT and SIGTERM.** Stop taking requests, finish running ones, close the pool.
 
 ## Not done / next
 
-- Backend endpoints and error mapping.
 - Frontend list, detail and payment form.
 - REVIEW.md.
 
@@ -200,5 +237,7 @@ Several of my migrations failed the first time on this data. The error is noted 
   - helped profile the seed data and find the data problems
   - planned the work
   - drafted the migration SQL and the `migrate.sh` / `reset.sh` scripts
+  - drafted the PL/SQL (`POLICY_RULES`, `PAYMENT_RULES`, `RECORD_PAYMENT`) and the database tests
+  - drafted the backend (routes, validation, error mapping) and the API test scripts
 - **What I did myself:** read every script, ran each migration, checked every error
   against the data, and chose how to handle each case.

@@ -5,6 +5,7 @@ const express = require('express');
 const cors = require('cors');
 
 const { initPool, withConnection, closePool } = require('./db');
+const { toAppError } = require('./errors');
 const policies = require('./routes/policies');
 
 const app = express();
@@ -22,25 +23,43 @@ app.get('/health', async (req, res) => {
 
 app.use('/policies', policies);
 
-// TODO(candidate): a real error handler. Business-rule failures raised by the
-// database should not all come back as 500.
+app.use((req, res) => {
+  res.status(404).json({ error: 'NOT_FOUND', message: `No route for ${req.method} ${req.path}` });
+});
+
+// Every error leaves as { error: CODE, message, details? }. Business-rule
+// refusals from the database become 4xx (see errors.js); only unexpected
+// failures are 500, and only those are logged with their stack.
+// eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-  console.error(err);
-  res.status(500).json({ error: 'INTERNAL', message: 'Something went wrong' });
+  const appErr = toAppError(err);
+  if (appErr.status >= 500) console.error(err);
+  res.status(appErr.status).json({
+    error: appErr.code,
+    message: appErr.message,
+    ...(appErr.details ? { details: appErr.details } : {}),
+  });
 });
 
 const port = Number(process.env.PORT || 3001);
+let server;
 
 initPool()
   .then(() => {
-    app.listen(port, () => console.log(`API listening on http://localhost:${port}`));
+    server = app.listen(port, () => console.log(`API listening on http://localhost:${port}`));
   })
   .catch((err) => {
     console.error('Could not start: database unreachable.', err.message);
     process.exit(1);
   });
 
-process.on('SIGINT', async () => {
+// Ctrl+C sends SIGINT; Docker and process managers send SIGTERM. Stop taking
+// new requests, let running ones finish, then close the pool.
+async function shutdown(signal) {
+  console.log(`${signal} received, shutting down`);
+  if (server) await new Promise((resolve) => server.close(resolve));
   await closePool();
   process.exit(0);
-});
+}
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));

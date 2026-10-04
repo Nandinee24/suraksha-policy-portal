@@ -16,14 +16,20 @@ async function initPool() {
     poolMin: Number(process.env.DB_POOL_MIN || 2),
     poolMax: Number(process.env.DB_POOL_MAX || 10),
     poolIncrement: 1,
+    // Fail fast (503) instead of hanging for the 60 s default when every
+    // connection is busy.
+    queueTimeout: Number(process.env.DB_QUEUE_TIMEOUT_MS || 10000),
   });
   return pool;
 }
 
 /**
- * TODO(candidate): this helper is deliberately thin.
- * Decide for yourself how connections are acquired and released, how errors
- * propagate, and whether you want an explicit transaction wrapper as well.
+ * Borrows a pooled connection for fn and always gives it back, also when fn
+ * throws. Closing a connection rolls back anything not committed, so a failed
+ * request never leaves a transaction or a row lock behind.
+ *
+ * No separate transaction wrapper: every write is one RECORD_PAYMENT call,
+ * committed with { autoCommit: true } on that execute.
  */
 async function withConnection(fn) {
   const p = await initPool();
@@ -31,7 +37,12 @@ async function withConnection(fn) {
   try {
     return await fn(conn);
   } finally {
-    await conn.close();
+    try {
+      await conn.close();
+    } catch (closeErr) {
+      // Don't let a failed release hide the error that fn threw.
+      console.error('Failed to release DB connection', closeErr.message);
+    }
   }
 }
 
