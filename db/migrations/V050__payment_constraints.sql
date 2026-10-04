@@ -3,21 +3,8 @@ SET DEFINE OFF
 SET FEEDBACK ON
 PROMPT V050: payment quarantine, keys and checks
 
--- Payments that cannot stay in PAYMENTS are MOVED here with a reason.
--- Financial rows are never just deleted.
-CREATE TABLE PAYMENTS_QUARANTINE (
-  PAYMENT_ID       NUMBER        NOT NULL,
-  POLICY_ID        NUMBER,
-  AMOUNT           NUMBER(12,2),
-  PAID_AT          TIMESTAMP,
-  IDEMPOTENCY_KEY  VARCHAR2(64),
-  COVERS_DUE_DATE  DATE,
-  CHANNEL          VARCHAR2(20),
-  CREATED_AT       TIMESTAMP,
-  REASON           VARCHAR2(40)  NOT NULL,
-  QUARANTINED_AT   TIMESTAMP DEFAULT SYSTIMESTAMP NOT NULL,
-  CONSTRAINT PK_PAYMENTS_QUARANTINE PRIMARY KEY (PAYMENT_ID)
-);
+-- PAYMENTS_QUARANTINE is created in V010. Bad payment rows are MOVED there
+-- with a reason - financial rows are never just deleted.
 
 -- 1. Payment for a policy that does not exist (700469 -> policy 888888).
 --    FK failed with ORA-02298. Unexplained money: quarantine for finance.
